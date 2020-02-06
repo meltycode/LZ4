@@ -1,0 +1,121 @@
+;--------------------------------------------------------------------------------------------------
+; LZ4 decrunch routine for Gameboy
+; 動作確認済み
+;hl=source lz4 address
+;de=destination address
+;need 5bytes work.
+;lz4litteral	db					;5byte ワークの並びを変えないこと
+;lz4length		dw
+;lz4addr		dw
+;LZ4 バージョン・サイズチェックやヘッダの各種フラグを無視しているので、互換性のないものがあるかも
+;
+lz4decrunch:
+	ld			bc,7
+	add			hl,bc
+	ld			a,[hl]
+	inc			hl
+	ld			b,[hl]						;ヘッダから 2byte サイズを取得
+	inc			hl
+	inc			hl
+	inc			hl
+
+	add			a,l
+	ldh			[lz4length],a
+	ld			a,h
+	adc			a,b
+	ldh			[lz4length+1],a				;圧縮データの終端アドレス
+
+.loop:
+	ld			a,[hl+]
+	ldh			[lz4litteral],a				;上下 4bit ずつ転送量またはフラグ
+	and			$F0
+	jr			z,.copy		 				;転送量 0 の場合は、既に転送済みのコピーを行う
+	swap		a
+	ld			b,0
+	ld			c,a
+	cp			$0F							;転送量 $0F の場合はさらに続く転送量を取得する
+	call		z,.getlength
+
+	dec			bc							;ldir
+	inc			c
+	inc			b
+.ldir1:
+	ld			a,[hl+]
+	ld			[de],a
+	inc			de
+	dec			c
+	jr			nz,.ldir1
+	dec			b
+	jr			nz,.ldir1
+
+.copy:
+	ldh			a,[lz4length]				;圧縮データ終端に達したら終了
+	cp			l
+	jr			nz,.copy2
+	ldh			a,[lz4length+1]
+	cp			h
+	ret			z
+.copy2:
+	ld			a,[hl+]						;bc=2byte オフセット値を読み込む
+	ld			c,a
+	ld			a,[hl+]
+	ld			b,a
+
+	push		hl
+	ld			a,e							;hl=de-bc 既に展開したデータを転送元とする。
+	sub			a,c							;元が sbc hl,bc なので sbc a,c なのだけど、or e が効いているので cf=0 のはず。
+	ld			l,a
+	ld			a,d
+	sbc			a,b
+	ld			h,a
+
+	ldh			a,[lz4litteral]
+	and			$0F
+	add			$04
+	ld			b,0
+	ld			c,a
+	cp			$0F+$04						;転送量 $0F+4 の場合、さらに続く転送量を取得する
+	jr			nz,.skip
+
+	ld			a,l
+	ldh			[lz4addr],a
+	ld			a,h
+	ldh			[lz4addr+1],a
+	pop			hl
+	call		.getlength
+	push		hl
+	ldh			a,[lz4addr]
+	ld			l,a
+	ldh			a,[lz4addr+1]
+	ld			h,a
+
+.skip:
+	dec			bc							;ldir 既に展開したデータのコピー転送
+	inc			c
+	inc			b
+.ldir2:
+	ld			a,[hl+]
+	ld			[de],a
+	inc			de
+	dec			c
+	jr			nz,.ldir2
+	dec			b
+	jr			nz,.ldir2
+
+	pop			hl
+	jp			.loop
+
+.getlength:									;転送バイト長を（さらに）取得する bc=現在の転送量
+	ld			a,[hl+]
+	cp			$FF							;$FF は長さ情報が続くサインを兼ねる
+	jr			nz,.addlen
+	inc			b
+	dec			bc							;bc += 255
+	jr			.getlength
+.addlen:
+	add			a,c
+	ld			c,a
+	adc			a,b
+	sub			c
+	ld			b,a							;bc=転送バイト長
+	ret
